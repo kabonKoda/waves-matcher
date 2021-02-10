@@ -67,7 +67,7 @@ class MatcherApiRoute(
   storeCommand: StoreValidatedCommand,
   orderBook: AssetPair => Option[Either[Unit, ActorRef]],
   orderBookHttpInfo: OrderBookHttpInfo,
-  getActualTickSize: AssetPair => BigDecimal,
+  getActualTickSize: AssetPair => Future[BigDecimal],
   orderValidator: Order => FutureResult[Order],
   matcherSettings: MatcherSettings,
   override val matcherStatus: () => MatcherStatus,
@@ -439,14 +439,16 @@ class MatcherApiRoute(
   )
   def getOrderBookInfo: Route = (path(AssetPairPM / "info") & get) { pairOrError =>
     withAssetPair(pairOrError, redirectToInverse = true, suffix = "/info") { pair =>
-      complete(SimpleResponse(getOrderBookInfo(pair)))
+      complete(getOrderBookInfo(pair).map(SimpleResponse(_)))
     }
   }
 
-  private def getOrderBookInfo(pair: AssetPair) = HttpOrderBookInfo(
-    restrictions = matcherSettings.orderRestrictions.get(pair).map(HttpOrderRestrictions.fromSettings),
-    matchingRules = HttpMatchingRules(tickSize = getActualTickSize(pair).toDouble)
-  )
+  private def getOrderBookInfo(pair: AssetPair): Future[HttpOrderBookInfo] = getActualTickSize(pair).map { tickSize =>
+    HttpOrderBookInfo(
+      restrictions = matcherSettings.orderRestrictions.get(pair).map(HttpOrderRestrictions.fromSettings),
+      matchingRules = HttpMatchingRules(tickSize = tickSize.toDouble)
+    )
+  }
 
   @Path("/orderbook")
   @ApiOperation(
@@ -504,12 +506,10 @@ class MatcherApiRoute(
   )
   def getOrderBooks: Route = (pathEndOrSingleSlash & get) {
     complete(
-      (matcher ? GetMarkets).mapTo[Seq[MarketData]].map { markets =>
-        SimpleResponse(
-          HttpTradingMarkets(
-            matcherPublicKey,
-            markets.map { md =>
-              val meta = getOrderBookInfo(md.pair)
+      (matcher ? GetMarkets).mapTo[Seq[MarketData]].flatMap { markets =>
+        Future
+          .sequence(markets.map { md =>
+            getOrderBookInfo(md.pair).map { meta =>
               HttpMarketDataWithMeta(
                 md.pair.amountAsset,
                 md.amountAssetName,
@@ -522,8 +522,8 @@ class MatcherApiRoute(
                 meta.matchingRules
               )
             }
-          )
-        )
+          })
+          .map(x => SimpleResponse(HttpTradingMarkets(matcherPublicKey, x)))
       }
     )
   }
