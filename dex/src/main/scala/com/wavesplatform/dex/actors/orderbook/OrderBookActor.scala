@@ -11,7 +11,7 @@ import com.wavesplatform.dex.actors.MatcherActor.{ForceStartOrderBook, OrderBook
 import com.wavesplatform.dex.actors.address.AddressActor
 import com.wavesplatform.dex.actors.events.OrderEventsCoordinatorActor
 import com.wavesplatform.dex.actors.orderbook.OrderBookActor._
-import com.wavesplatform.dex.actors.{MatcherActor, WorkingStash, orderbook}
+import com.wavesplatform.dex.actors.{orderbook, MatcherActor, WorkingStash}
 import com.wavesplatform.dex.api.ws.actors.WsInternalBroadcastActor
 import com.wavesplatform.dex.api.ws.protocol.WsOrdersUpdate
 import com.wavesplatform.dex.domain.asset.AssetPair
@@ -21,7 +21,7 @@ import com.wavesplatform.dex.error.ErrorFormatterContext
 import com.wavesplatform.dex.metrics.TimerExt
 import com.wavesplatform.dex.model.Events._
 import com.wavesplatform.dex.model.OrderBook.OrderBookUpdates
-import com.wavesplatform.dex.model.{LastTrade, _}
+import com.wavesplatform.dex.model._
 import com.wavesplatform.dex.queue.{ValidatedCommand, ValidatedCommandWithMeta}
 import com.wavesplatform.dex.settings.{DenormalizedMatchingRule, MatchingRule, OrderRestrictionsSettings}
 import com.wavesplatform.dex.time.Time
@@ -43,8 +43,7 @@ class OrderBookActor(
   normalizeMatchingRule: DenormalizedMatchingRule => MatchingRule,
   getMakerTakerFeeByOffset: Long => (AcceptedOrder, LimitOrder) => (Long, Long),
   restrictions: Option[OrderRestrictionsSettings]
-)(implicit ec: ExecutionContext, efc: ErrorFormatterContext)
-    extends classic.Actor
+) extends classic.Actor
     with WorkingStash
     with ScorexLogging {
 
@@ -80,30 +79,29 @@ class OrderBookActor(
     }
   }
 
-  override def receive: Receive = recovering
+  override def receive: Receive = recovering(gotSnapshot = false, gotData = false)
 
-  private def recovering: Receive = {
+  private def recovering(gotSnapshot: Boolean, gotData: Boolean): Receive = {
     case OrderBookSnapshotStoreActor.Response.GetSnapshot(result) =>
       result.foreach { case (_, snapshot) => orderBook = OrderBook(snapshot) }
 
       lastSavedSnapshotOffset = result.map(_._1)
       lastProcessedOffset = lastSavedSnapshotOffset
-
-      log.debug(
-        lastSavedSnapshotOffset match {
-          case None => "Recovery completed"
-          case Some(x) => s"Recovery completed at $x: $orderBook"
-        }
-      )
-
       lastProcessedOffset foreach actualizeRules
 
+      // Timestamp here doesn't matter
+      processEvents(time.getTimestamp(), orderBook.allOrders.map(lo => OrderAdded(lo, OrderAddedReason.OrderBookRecovered, lo.order.timestamp)))
+
+      if (gotData) becomeWorking()
+      else context.become(recovering(gotSnapshot = true, gotData))
+
+    case cmd: Command.UpdateData =>
       aggregatedRef = context.spawn(
         orderbook.AggregatedOrderBookActor(
           settings.aggregated,
           assetPair,
-          efc.unsafeAssetDecimals(assetPair.amountAsset),
-          efc.unsafeAssetDecimals(assetPair.priceAsset),
+          cmd.amountAssetDecimals,
+          cmd.priceAssetDecimals,
           restrictions,
           matchingRules.head.tickSize.toDouble,
           time,
@@ -113,14 +111,23 @@ class OrderBookActor(
       )
       context.watch(aggregatedRef)
 
-      // Timestamp here doesn't matter
-      processEvents(time.getTimestamp(), orderBook.allOrders.map(lo => OrderAdded(lo, OrderAddedReason.OrderBookRecovered, lo.order.timestamp)))
-
-      owner ! OrderBookRecovered(assetPair, lastSavedSnapshotOffset)
-      context.become(working)
-      unstashAll()
+      if (gotSnapshot) becomeWorking()
+      else context.become(recovering(gotSnapshot, gotData = true))
 
     case x => stash(x)
+  }
+
+  private def becomeWorking(): Unit = {
+    log.debug(
+      lastSavedSnapshotOffset match {
+        case None => "Recovery completed"
+        case Some(x) => s"Recovery completed at $x: $orderBook"
+      }
+    )
+
+    owner ! OrderBookRecovered(assetPair, lastSavedSnapshotOffset)
+    context.become(working)
+    unstashAll()
   }
 
   private def working: Receive = {
@@ -269,40 +276,34 @@ object OrderBookActor {
     normalizeMatchingRule: DenormalizedMatchingRule => MatchingRule,
     getMakerTakerFeeByOffset: Long => (AcceptedOrder, LimitOrder) => (Long, Long),
     restrictions: Option[OrderRestrictionsSettings]
-  )(implicit ec: ExecutionContext, efc: ErrorFormatterContext): classic.Props =
-    classic.Props(
-      new OrderBookActor(
-        settings,
-        parent,
-        eventsCoordinatorRef,
-        snapshotStore,
-        wsInternalHandlerDirectoryRef,
-        assetPair,
-        time,
-        matchingRules,
-        updateCurrentMatchingRules,
-        normalizeMatchingRule,
-        getMakerTakerFeeByOffset,
-        restrictions
-      )
+  ): classic.Props = classic.Props(
+    new OrderBookActor(
+      settings,
+      parent,
+      eventsCoordinatorRef,
+      snapshotStore,
+      wsInternalHandlerDirectoryRef,
+      assetPair,
+      time,
+      matchingRules,
+      updateCurrentMatchingRules,
+      normalizeMatchingRule,
+      getMakerTakerFeeByOffset,
+      restrictions
     )
+  )
 
   def name(assetPair: AssetPair): String = assetPair.toString
 
-  case class MarketStatus(
-    lastTrade: Option[LastTrade],
-    bestBid: Option[LevelAgg],
-    bestAsk: Option[LevelAgg]
-  )
+  sealed trait Message extends Product with Serializable
 
-  object MarketStatus {
-    def apply(ob: OrderBook): MarketStatus = MarketStatus(ob.lastTrade, ob.bestBid, ob.bestAsk)
+  sealed trait Command extends Message
+
+  object Command {
+    case class UpdateData(amountAssetDecimals: Int, priceAssetDecimals: Int) extends Command
   }
-
-  case class Snapshot(eventNr: Option[Long], orderBook: OrderBookSnapshot)
 
   // Internal messages
   case class OrderBookRecovered(assetPair: AssetPair, eventNr: Option[Long])
   case class OrderBookSnapshotUpdateCompleted(assetPair: AssetPair, currentOffset: Option[Long])
-  case object SendWsUpdates
 }

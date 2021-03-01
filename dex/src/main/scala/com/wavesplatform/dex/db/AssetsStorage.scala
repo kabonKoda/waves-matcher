@@ -22,6 +22,8 @@ trait AssetsStorage[F[_]] {
 
 object AssetsStorage {
 
+  def unsafeCache
+
   def cache[F[_]: Applicative](inner: AssetsStorage[F]): AssetsStorage[F] = new AssetsStorage[F] {
 
     private val assetsCache = new ConcurrentHashMap[Asset, BriefAssetDescription]

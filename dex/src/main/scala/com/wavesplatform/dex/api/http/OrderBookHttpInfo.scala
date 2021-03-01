@@ -2,8 +2,7 @@ package com.wavesplatform.dex.api.http
 
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpResponse}
 import com.wavesplatform.dex.actors.OrderBookAskAdapter
-import com.wavesplatform.dex.actors.orderbook.AggregatedOrderBookActor.Depth
-import com.wavesplatform.dex.actors.orderbook.OrderBookActor.MarketStatus
+import com.wavesplatform.dex.actors.orderbook.AggregatedOrderBookActor.{Depth, MarketStatus}
 import com.wavesplatform.dex.api.http.entities.MatcherResponse.toHttpResponse
 import com.wavesplatform.dex.api.http.entities.{HttpOrderBook, HttpOrderBookStatus, OrderBookUnavailable, SimpleResponse}
 import com.wavesplatform.dex.domain.asset.{Asset, AssetPair}

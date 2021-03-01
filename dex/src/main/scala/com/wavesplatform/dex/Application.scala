@@ -164,8 +164,7 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
     wavesBlockchainAsyncClient.close().map(_ => Done)
   }
 
-  private val pairBuilder =
-    new AssetPairBuilder(settings, getAndCacheDescription(assetsCache, wavesBlockchainAsyncClient, _), settings.blacklistedAssets)
+  private val pairBuilder = new AssetPairBuilder(settings, getAndCacheDescription, settings.blacklistedAssets)
 
   private val txWriterRef =
     actorSystem.actorOf(WriteExchangeTransactionActor.props(ExchangeTxStorage.levelDB(asyncLevelDb)), WriteExchangeTransactionActor.name)
@@ -264,8 +263,7 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
     }
 
     actorSystem.actorOf(
-      MatcherActor.
-        props(
+      MatcherActor.props(
         settings,
         assetPairsDB,
         {
@@ -451,7 +449,7 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
   private def loadAllKnownAssets(): Future[Unit] =
     assetPairsDB.all().map(_.flatMap(_.assets) ++ settings.mentionedAssets).flatMap { assetsToLoad =>
       Future
-        .traverse(assetsToLoad)(asset => getDecimalsFromCache(asset).value tupleLeft asset)
+        .traverse(assetsToLoad)(asset => getAndCacheDecimals(asset).value tupleLeft asset)
         .map { xs =>
           val notFoundAssets = xs.collect { case (id, Left(_)) => id }
           if (notFoundAssets.nonEmpty) {
@@ -489,8 +487,6 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
       }
     }
 
-  private def getDecimalsFromCache(asset: Asset): FutureResult[Int] = getAndCacheDecimals(assetsCache, wavesBlockchainAsyncClient, asset)
-
   private def setStatus(newStatus: MatcherStatus): Unit = {
     status = newStatus
     log.info(s"Status now is $newStatus")
@@ -517,14 +513,9 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
     p.future
   }
 
-  private def getAndCacheDecimals(assetsCache: AssetsStorage[Future], blockchain: WavesBlockchainClient, asset: Asset): FutureResult[Int] =
-    getAndCacheDescription(assetsCache, blockchain, asset).map(_.decimals)(catsStdInstancesForFuture)
+  private def getAndCacheDecimals(asset: Asset): FutureResult[Int] = getAndCacheDescription(asset).map(_.decimals)
 
-  private def getAndCacheDescription(
-    assetsCache: AssetsStorage[Future],
-    blockchain: WavesBlockchainClient,
-    asset: Asset
-  ): FutureResult[BriefAssetDescription] =
+  private def getAndCacheDescription(asset: Asset): FutureResult[BriefAssetDescription] =
     asset match {
       case Waves => wavesLifted
       case asset: IssuedAsset =>
@@ -532,7 +523,7 @@ class Application(settings: MatcherSettings, config: Config)(implicit val actorS
           case Some(x) => liftValueAsync[BriefAssetDescription](x)
           case None =>
             EitherT {
-              blockchain
+              wavesBlockchainAsyncClient
                 .assetDescription(asset)
                 .flatMap {
                   case Some(x) => assetsCache.put(asset, x).map(_ => x.asRight)

@@ -4,13 +4,13 @@ import cats.data.EitherT
 import cats.instances.future._
 import com.wavesplatform.dex.actors.OrderBookAskAdapter
 import com.wavesplatform.dex.actors.orderbook.OrderBookActor
-import com.wavesplatform.dex.actors.orderbook.OrderBookActor.MarketStatus
+import com.wavesplatform.dex.actors.orderbook.AggregatedOrderBookActor.MarketStatus
 import com.wavesplatform.dex.caches.{MatchingRulesCache, OrderFeeSettingsCache, RateCache}
 import com.wavesplatform.dex.db.AssetsStorage
 import com.wavesplatform.dex.domain.account.{Address, PublicKey}
 import com.wavesplatform.dex.domain.asset.Asset
 import com.wavesplatform.dex.domain.order.Order
-import com.wavesplatform.dex.effect.{FutureResult, liftFutureAsync, liftValueAsync}
+import com.wavesplatform.dex.effect.{liftFutureAsync, liftValueAsync, FutureResult}
 import com.wavesplatform.dex.error.{ErrorFormatterContext, MatcherError}
 import com.wavesplatform.dex.grpc.integration.clients.WavesBlockchainClient
 import com.wavesplatform.dex.grpc.integration.dto.BriefAssetDescription
@@ -72,7 +72,7 @@ object ValidationStages {
     for {
       marketStatus <- {
         if (settings.maxPriceDeviations.enable) EitherT(orderBookAskAdapter.getMarketStatus(o.assetPair))
-        else liftValueAsync(Option.empty[OrderBookActor.MarketStatus])
+        else liftValueAsync(Option.empty[MarketStatus])
       }
       _ <- liftAsync(syncValidation(marketStatus, assetsCache.unsafeGetDecimals))
       _ <- asyncValidation(assetsCache.unsafeGet)

@@ -7,7 +7,7 @@ import cats.instances.map.catsKernelStdCommutativeMonoidForMap
 import cats.syntax.either._
 import cats.syntax.flatMap._
 import cats.syntax.semigroup.catsSyntaxSemigroup
-import com.wavesplatform.dex.actors.orderbook.OrderBookActor.MarketStatus
+import com.wavesplatform.dex.actors.orderbook.AggregatedOrderBookActor.MarketStatus
 import com.wavesplatform.dex.caches.RateCache
 import com.wavesplatform.dex.domain.account.{Address, PublicKey}
 import com.wavesplatform.dex.domain.asset.Asset
